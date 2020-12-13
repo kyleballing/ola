@@ -46,7 +46,7 @@ bool GPIOOutputPort::Init() {
 
 string GPIOOutputPort::Description() const {
   vector<uint16_t> pins = m_driver->PinList();
-  return "Pins " + ola::StringJoin(", ", pins);
+  return "GPIO Pins: " + ola::StringJoin(", ", pins);
 }
 
 bool GPIOOutputPort::WriteDMX(const DmxBuffer &buffer,
