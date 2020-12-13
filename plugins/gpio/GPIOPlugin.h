@@ -56,8 +56,7 @@ class GPIOPlugin: public ola::Plugin {
 
   static const char GPIO_PINS_KEY[];
   static const char GPIO_SLOT_OFFSET_KEY[];
-  static const char GPIO_TURN_OFF_KEY[];
-  static const char GPIO_TURN_ON_KEY[];
+  static const char GPIO_PWM_FREQUENCY_KEY[];
   static const char PLUGIN_NAME[];
   static const char PLUGIN_PREFIX[];
 
@@ -67,3 +66,5 @@ class GPIOPlugin: public ola::Plugin {
 }  // namespace plugin
 }  // namespace ola
 #endif  // PLUGINS_GPIO_GPIOPLUGIN_H_
+
+

@@ -28,7 +28,6 @@
 #include "ola/StringUtils.h"
 #include "plugins/gpio/GPIODevice.h"
 #include "plugins/gpio/GPIODriver.h"
-#include "plugins/gpio/GPIOPluginDescription.h"
 
 namespace ola {
 namespace plugin {
@@ -38,39 +37,19 @@ using std::auto_ptr;
 using std::string;
 using std::vector;
 
+// The values of these keys should match the argument names in the README file
 const char GPIOPlugin::GPIO_PINS_KEY[] = "gpio_pins";
 const char GPIOPlugin::GPIO_SLOT_OFFSET_KEY[] = "gpio_slot_offset";
-const char GPIOPlugin::GPIO_TURN_OFF_KEY[] = "gpio_turn_off";
-const char GPIOPlugin::GPIO_TURN_ON_KEY[] = "gpio_turn_on";
+const char GPIOPlugin::GPIO_PWM_FREQUENCY_KEY[] = "gpio_pwm_frequency";
+
 const char GPIOPlugin::PLUGIN_NAME[] = "GPIO";
 const char GPIOPlugin::PLUGIN_PREFIX[] = "gpio";
 
 bool GPIOPlugin::StartHook() {
+  // Let's populate the driver options gpio_pins, start_address, and pwm_frequency
   GPIODriver::Options options;
-  if (!StringToInt(m_preferences->GetValue(GPIO_TURN_ON_KEY),
-                   &options.turn_on)) {
-    OLA_WARN << "Invalid value for " << GPIO_TURN_ON_KEY;
-    return false;
-  }
 
-  if (!StringToInt(m_preferences->GetValue(GPIO_TURN_OFF_KEY),
-                   &options.turn_off)) {
-    OLA_WARN << "Invalid value for " << GPIO_TURN_OFF_KEY;
-    return false;
-  }
-
-  if (!StringToInt(m_preferences->GetValue(GPIO_SLOT_OFFSET_KEY),
-                   &options.start_address)) {
-    OLA_WARN << "Invalid value for " << GPIO_SLOT_OFFSET_KEY;
-    return false;
-  }
-
-  if (options.turn_off >= options.turn_on) {
-    OLA_WARN << GPIO_TURN_OFF_KEY << " must be strictly less than "
-             << GPIO_TURN_ON_KEY;
-    return false;
-  }
-
+  // Process the gpio_pins argument
   vector<string> pin_list;
   StringSplit(m_preferences->GetValue(GPIO_PINS_KEY), &pin_list, ",");
   vector<string>::const_iterator iter = pin_list.begin();
@@ -87,10 +66,27 @@ bool GPIOPlugin::StartHook() {
     options.gpio_pins.push_back(pin);
   }
 
+  // stop now if no pins are defined; do not initialize or register device
   if (options.gpio_pins.empty()) {
     return true;
   }
 
+  // Process the gpio_slot_offset argument
+  char offset[] = m_preferences->GetValue(GPIO_SLOT_OFFSET_KEY);
+  if (!StringToInt(offset, &options.start_address)) {
+    OLA_WARN << "Invalid value for "<< GPIO_SLOT_OFFSET_KEY << ": " << offset;
+    return false;
+  }
+
+  // Process the gpio_pwm_frequency argument
+  char freq[] = m_preferences->GetValue(GPIO_PWM_FREQUENCY_KEY);
+  if (!StringToInt(freq, &options.pwm_frequency)) {
+    OLA_WARN << "Invalid value for "<< GPIO_PWM_FREQUENCY_KEY << ": " << freq;
+    return false;
+  }
+
+
+  // Initialize the GPIO device and pass it options
   std::auto_ptr<GPIODevice> device(new GPIODevice(this, options));
   if (!device->Start()) {
     return false;
@@ -127,20 +123,20 @@ bool GPIOPlugin::SetDefaultPreferences() {
   save |= m_preferences->SetDefaultValue(GPIO_SLOT_OFFSET_KEY,
                                          UIntValidator(1, DMX_UNIVERSE_SIZE),
                                          "1");
-  save |= m_preferences->SetDefaultValue(
-      GPIO_TURN_ON_KEY,
-      UIntValidator(DMX_MIN_SLOT_VALUE + 1, DMX_MAX_SLOT_VALUE),
-      "128");
-  save |= m_preferences->SetDefaultValue(
-      GPIO_TURN_OFF_KEY,
-      UIntValidator(DMX_MIN_SLOT_VALUE, DMX_MAX_SLOT_VALUE - 1),
-      "127");
+  save |= m_preferences->SetDefaultValue(GPIO_PWM_FREQUENCY_KEY,
+                                         UIntValidator(PWM_MIN_FREQUENCY,
+                                                       PWM_MAX_FREQUENCY),
+                                         "1000");
 
   if (save) {
     m_preferences->Save();
   }
 
   if (m_preferences->GetValue(GPIO_SLOT_OFFSET_KEY).empty()) {
+    return false;
+  }
+
+  if (m_preferences->GetValue(GPIO_PWM_FREQUENCY_KEY).empty()) {
     return false;
   }
 
