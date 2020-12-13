@@ -27,6 +27,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <pigpiod_if2.h> // requires pigpiod daemon to be installed
 
 #include <sstream>
 #include <string>
@@ -40,16 +41,36 @@ namespace ola {
 namespace plugin {
 namespace gpio {
 
-const char GPIODriver::GPIO_BASE_DIR[] = "/sys/class/gpio/gpio";
-
 using ola::thread::MutexLocker;
 using std::string;
 using std::vector;
+
+/*By default pigpio uses a sample rate of 5 microseconds using PCM.
+At the default sample rate only the following PWM frequencies (Hz) are available:
+8000, 4000, 2000, 1600, 1000, 800, 500, 400, 320,
+250, 200, 160, 100, 80, 50, 40, 20, 10
+When the frequency is set, it will be rounded to the nearest available frequency
+*/
+const int PWM_MIN_FREQUENCY = 10;
+const int PWM_MAX_FREQUENCY = 8000;
+const int PI_MIN_PORT = 1024;
+const int PI_MAX_PORT = 49151;
+const uint8_t DUTY_CYCLE_RANGE = 255;
 
 GPIODriver::GPIODriver(const Options &options)
     : m_options(options),
       m_term(false),
       m_dmx_changed(false) {
+        string* p_address = NULL;
+        uint16_t* p_port = NULL;
+        if (!m_options.pi_address.empty()) {
+          p_address = &m_options.pi_address;
+        }
+        if (!m_options.pi_port < PI_MIN_PORT) {
+          p_address = &m_options.pi_port;
+        }
+
+        pi_id = gpio_start(p_address, p_port);
 }
 
 GPIODriver::~GPIODriver() {
@@ -60,7 +81,7 @@ GPIODriver::~GPIODriver() {
   m_cond.Signal();
   Join();
 
-  CloseGPIOFDs();
+  gpio_stop(pi_id);
 }
 
 bool GPIODriver::Init() {
@@ -117,65 +138,72 @@ void *GPIODriver::Run() {
 }
 
 bool GPIODriver::SetupGPIO() {
-  /**
-   * This relies on the pins being exported:
-   *   echo N > /sys/class/gpio/export
-   * That requires root access.
-   */
-  const string direction("out");
-  bool failed = false;
-  vector<uint16_t>::const_iterator iter = m_options.gpio_pins.begin();
-  for (; iter != m_options.gpio_pins.end(); ++iter) {
-    std::ostringstream str;
-    str << GPIO_BASE_DIR << static_cast<int>(*iter) << "/value";
-    int pin_fd;
-    if (!ola::io::Open(str.str(), O_RDWR, &pin_fd)) {
-      failed = true;
-      break;
+
+  int mode_result = -1; // assume the worst
+  int range_result = -1; // assume the worst
+  int freq_result = -1; // assume the worst
+
+  uint16_t current_slot = m_options.start_address - 1;
+  GPIOPin new_pin;
+
+  vector<uint16_t>::const_iterator p = m_options.gpio_pins.begin();
+  for (; p != m_options.gpio_pins.end(); ++p) {
+    mode_result = set_mode(pi_id, *p, PI_OUTPUT);
+    if (mode_result < 0) {
+      OLA_WARN << "Could not set pin " << *p << " to output mode, error: " << mode_result;
+      continue;
     }
 
-    GPIOPin pin = {pin_fd, UNDEFINED, false};
+    // TODO Not sure if the following is needed/desired
+    // gpioSetPullUpDown(static_cast<int>(*iter), PI_PUD_DOWN);
+    // could result in errors PI_BAD_GPIO or PI_BAD_PUD
 
-    // Set dir
-    str.str("");
-    str << GPIO_BASE_DIR << static_cast<int>(*iter) << "/direction";
-    int fd;
-    if (!ola::io::Open(str.str(), O_RDWR, &fd)) {
-      failed = true;
-      break;
-    }
-    if (write(fd, direction.c_str(), direction.size()) < 0) {
-      OLA_WARN << "Failed to enable output on " << str.str() << " : "
-               << strerror(errno);
-      failed = true;
-    }
-    close(fd);
+    // Turn everything off at first
+    gpio_write(pi_id, *p, 0)
 
-    m_gpio_pins.push_back(pin);
+    //TODO - allow individual ranges for each pin
+    range_result = set_PWM_range(pi_id, *p, DUTY_CYCLE_RANGE)
+    if (range_result < 0) {
+      OLA_WARN << "Could not set range on pin " << *p << " error: " << range_result;
+      continue;
+    }
+
+    //TODO - allow individual frequencies for each pin
+    freq_result = set_PWM_frequency(pi_id, *p, m_options.pwm_frequency)
+    if (freq_result < 0) {
+      OLA_WARN << "Could not set frequency on pin " << *p << " error: " << freq_result;
+      continue;
+    }
+
+    // Do we have a valid slot to assign?
+    if (current_slot > DMX_UNIVERSE_SIZE) {
+      OLA_WARN << "Maximum DMX slot exceeded for pin " << *p;
+      return true;
+    }
+
+    // If we made it this far, we have a valid pin and we can add it to the vector
+    new_pin.pin = p;
+    new_pin.dmx_slot = current_slot;
+    new_pin.frequency = freq_result;
+
+    GPIOPins.push_back(new_pin);
   }
 
-  if (failed) {
-    CloseGPIOFDs();
-    return false;
-  }
   return true;
 }
 
 bool GPIODriver::UpdateGPIOPins(const DmxBuffer &dmx) {
-  enum Action {
-    TURN_ON,
-    TURN_OFF,
-    NO_CHANGE,
-  };
+
   const uint16_t first_slot = m_options.start_address - 1;
 
   for (uint16_t i = 0;
-       i < m_gpio_pins.size() && (i + first_slot < dmx.Size());
+       i < m_options.gpio_pins.size() && (i + first_slot < dmx.Size());
        i++) {
-    Action action = NO_CHANGE;
     uint8_t slot_value = dmx.Get(i + first_slot);
 
-    switch (m_gpio_pins[i].state) {
+    gpioPWM(m_options.gpio_pins[i], slot_value)
+
+    switch ( [i].state) {
       case ON:
         action = (slot_value <= m_options.turn_off ? TURN_OFF : NO_CHANGE);
         break;
@@ -210,6 +238,9 @@ void GPIODriver::CloseGPIOFDs() {
     close(iter->fd);
   }
   m_gpio_pins.clear();
+  // All done with pi gpio
+  gpioTerminate();
+
 }
 }  // namespace gpio
 }  // namespace plugin

@@ -41,6 +41,8 @@ using std::vector;
 const char GPIOPlugin::GPIO_PINS_KEY[] = "gpio_pins";
 const char GPIOPlugin::GPIO_SLOT_OFFSET_KEY[] = "gpio_slot_offset";
 const char GPIOPlugin::GPIO_PWM_FREQUENCY_KEY[] = "gpio_pwm_frequency";
+const char GPIOPlugin::GPIO_PI_ADDRESS_KEY[] = "gpio_pi_address";
+const char GPIOPlugin::GPIO_PI_PORT_KEY[] = "gpio_pi_port";
 
 const char GPIOPlugin::PLUGIN_NAME[] = "GPIO";
 const char GPIOPlugin::PLUGIN_PREFIX[] = "gpio";
@@ -72,19 +74,33 @@ bool GPIOPlugin::StartHook() {
   }
 
   // Process the gpio_slot_offset argument
-  char offset[] = m_preferences->GetValue(GPIO_SLOT_OFFSET_KEY);
-  if (!StringToInt(offset, &options.start_address)) {
-    OLA_WARN << "Invalid value for "<< GPIO_SLOT_OFFSET_KEY << ": " << offset;
-    return false;
+  string offset = m_preferences->GetValue(GPIO_SLOT_OFFSET_KEY);
+  if (offset.empty()) {
+    options.pi_port = 0;
+  } else {
+    if (!StringToInt(offset, &options.start_address)) {
+      OLA_WARN << "Invalid value for "<< GPIO_SLOT_OFFSET_KEY << ": " << offset;
+      return false;
+    }
   }
 
   // Process the gpio_pwm_frequency argument
-  char freq[] = m_preferences->GetValue(GPIO_PWM_FREQUENCY_KEY);
-  if (!StringToInt(freq, &options.pwm_frequency)) {
-    OLA_WARN << "Invalid value for "<< GPIO_PWM_FREQUENCY_KEY << ": " << freq;
+  string frequency = m_preferences->GetValue(GPIO_PWM_FREQUENCY_KEY);
+  if (!StringToInt(frequency, &options.pwm_frequency)) {
+    OLA_WARN << "Invalid value for "<< GPIO_PWM_FREQUENCY_KEY << ": " << frequency;
     return false;
   }
 
+  // Process the gpio_pi_address argument
+  options.pi_address = m_preferences->GetValue(GPIO_PI_ADDRESS_KEY);
+  // TODO - add some validation
+
+  // Process the gpio_pi_port argument
+  string port = m_preferences->GetValue(GPIO_PI_PORT_KEY);
+  if (!StringToInt(port, &options.pi_port)) {
+    OLA_WARN << "Invalid value for "<< GPIO_PI_PORT_KEY << ": " << port;
+    return false;
+  }
 
   // Initialize the GPIO device and pass it options
   std::auto_ptr<GPIODevice> device(new GPIODevice(this, options));
@@ -127,6 +143,13 @@ bool GPIOPlugin::SetDefaultPreferences() {
                                          UIntValidator(PWM_MIN_FREQUENCY,
                                                        PWM_MAX_FREQUENCY),
                                          "1000");
+  save |= m_preferences->SetDefaultValue(GPIO_PI_ADDRESS_KEY,
+                                         StringValidator(),
+                                         "");
+  save |= m_preferences->SetDefaultValue(GPIO_PI_PORT_KEY,
+                                         UIntValidator(PI_MIN_PORT,
+                                                       PI_MAX_PORT),
+                                         "");
 
   if (save) {
     m_preferences->Save();

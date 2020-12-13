@@ -26,6 +26,7 @@
 #include <ola/base/Macro.h>
 #include <ola/thread/Thread.h>
 
+#include <string>
 #include <vector>
 
 namespace ola {
@@ -42,7 +43,7 @@ class GPIODriver : private ola::thread::Thread {
    */
   struct Options {
    public:
-    Options(): start_address(1), turn_on(128), turn_off(127) {}
+    Options(): start_address(1), pwm_frequency(1000) {}
 
     /**
      * @brief A list of I/O pins to map to slots.
@@ -55,14 +56,19 @@ class GPIODriver : private ola::thread::Thread {
     uint16_t start_address;
 
     /**
-     * @brief The value above which a pin will be turned on.
+     * @brief The PWM frequency controlling gpio pins
      */
-    uint8_t turn_on;
+    uint16_t pwm_frequency;
 
     /**
-     * @brief The value below which a pin will be turned off.
+     * @brief The IP address used to connect to pigpiod
      */
-    uint8_t turn_off;
+    std::string pi_address;
+
+    /**
+     * @brief The port used to connect to pigpiod
+     */
+    uint16_t pi_port;
   };
 
   /**
@@ -98,23 +104,19 @@ class GPIODriver : private ola::thread::Thread {
   void *Run();
 
  private:
-  enum GPIOState {
-    ON,
-    OFF,
-    UNDEFINED,
-  };
-
   struct GPIOPin {
-    int fd;
-    GPIOState state;
-    bool last_value;
+    uint16_t pin;
+    uint16_t dmx_slot;
+    uint8_t dmx_level;
+    uint16_t duty_cycle; //should always match dmx level, but can be as large as range
+    int frequency; // TODO allow custom frequency per pin
+    // int range; // TODO allow custom range per pin
   };
 
   typedef std::vector<GPIOPin> GPIOPins;
+  int pi_id;
 
   const Options m_options;
-  GPIOPins m_gpio_pins;
-
   DmxBuffer m_buffer;
   bool m_term;  // GUARDED_BY(m_mutex);
   bool m_dmx_changed;  // GUARDED_BY(m_mutex);
@@ -123,9 +125,6 @@ class GPIODriver : private ola::thread::Thread {
 
   bool SetupGPIO();
   bool UpdateGPIOPins(const DmxBuffer &dmx);
-  void CloseGPIOFDs();
-
-  static const char GPIO_BASE_DIR[];
 
   DISALLOW_COPY_AND_ASSIGN(GPIODriver);
 };
